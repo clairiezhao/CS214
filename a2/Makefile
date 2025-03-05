@@ -1,2 +1,3 @@
 default:
-	gcc kernel.c -shared libkernel.so -O3 -lm
+	gcc -c -fPIC kernel.c -o kernel.o
+	gcc kernel.o -shared -o libkernel.so -O3 -lm
