@@ -1,5 +1,8 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
+
+void closest_centroid(float r, float g, float b, int num_centroids, float* centroids, float* sum_rgb, int* num_pixels_to_centroid);
 
 void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max_iters, int seed, float* centroids, int* labels) {
 
@@ -17,7 +20,13 @@ void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max
     int converge = 0;
     float red, green, blue;
 
+    /*for(int i = 100; i < 110; i++) {
+        printf("red: %0.1f, green: %0.1f, blue: %0.1f\n", pixels[i], pixels[i+1], pixels[i+2]);
+    }*/
+    
+
     for(int n = 0; n < max_iters; n++) {
+        printf("Iteration: %d\n", n);
         for(int i = 0; i < (num_pixels * 3); i += 3) {
             closest_centroid(pixels[i], pixels[i + 1], pixels[i + 2], num_centroids, centroids, sum_rgb, num_pixels_to_centroid);
         }
