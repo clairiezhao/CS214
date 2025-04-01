@@ -7,7 +7,6 @@ void convert_to_YCrCb(unsigned char *rgb_pixels, unsigned char *ycc_pixels, int 
 
     if(width == 0 || height == 0) {
         //set ycc_pixels to 0
-
     }
 
     unsigned char red, blue, green;
