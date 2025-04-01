@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-void closest_centroid(float r, float g, float b, int num_centroids, float* centroids, float* sum_rgb, int* num_pixels_to_centroid);
+void closest_centroid(float r, float g, float b, int num_centroids, float* centroids, float* sum_rgb, int* num_pixels_to_centroid, int* labels);
 
 void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max_iters, int seed, float* centroids, int* labels) {
 
@@ -15,7 +15,7 @@ void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max
     //float array of sum of r,g,b comp of every pixel assigned to each centroid
     float* sum_rgb = (float*)calloc(num_centroids * 3, sizeof(float));
     //int array of number of pixels assigned to each centroid
-    int* num_pixels_to_centroid = (int*)malloc(num_centroids * sizeof(int));
+    int* num_pixels_to_centroid = (int*)calloc(num_centroids, sizeof(int));
     //int that checks if the centroids converged early: 0 for false and 1 for true
     int converge = 0, assigned_pixels = 0;
     float red, green, blue;
@@ -28,7 +28,7 @@ void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max
     for(int n = 0; n < max_iters; n++) {
         printf("Iteration: %d\n", n);
         for(int i = 0; i < (num_pixels * 3); i += 3) {
-            closest_centroid(pixels[i], pixels[i + 1], pixels[i + 2], num_centroids, centroids, sum_rgb, num_pixels_to_centroid);
+            closest_centroid(pixels[i], pixels[i + 1], pixels[i + 2], num_centroids, centroids, sum_rgb, num_pixels_to_centroid, labels);
         }
     
         //set new centroids and check if centroids converge
@@ -51,6 +51,7 @@ void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max
             sum_rgb[i] = 0;
             sum_rgb[i + 1] = 0;
             sum_rgb[i + 2] = 0;
+            num_pixels_to_centroid[i / 3] = 0;
         }
 
         //break early if centroids converged
@@ -62,7 +63,7 @@ void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max
     free(num_pixels_to_centroid);
 }
 
-void closest_centroid(float r, float g, float b, int num_centroids, float* centroids, float* sum_rgb, int* num_pixels_to_centroid) {
+void closest_centroid(float r, float g, float b, int num_centroids, float* centroids, float* sum_rgb, int* num_pixels_to_centroid, int* labels) {
 
     int closest_centroid;
     float dist_r, dist_g, dist_b, dist_sq, max_dist;
@@ -91,4 +92,6 @@ void closest_centroid(float r, float g, float b, int num_centroids, float* centr
     sum_rgb[closest_centroid + 2] += b;
     //increment number of pixels assigned to this centroid by 1
     num_pixels_to_centroid[closest_centroid / 3] += 1;
+    //set label of current pixel
+    labels[closest_centroid / 3] = closest_centroid;
 }
