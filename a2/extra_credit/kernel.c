@@ -6,10 +6,14 @@ void closest_centroid(float r, float g, float b, int num_centroids, float* centr
 
 void kmeans_clustering(float* pixels, int num_pixels, int num_centroids, int max_iters, int seed, float* centroids, int* labels) {
 
+    if(num_centroids == 0 || num_pixels == 0) {
+        return;
+    }
+
     //initialize centroids
     srand(seed);
     for(int i = 0; i < num_centroids * 3; i++) {
-        centroids[i] = rand() % 256;
+        centroids[i] = rand() % num_centroids;
     }
 
     //double array of sum of r,g,b comp of every pixel assigned to each centroid
