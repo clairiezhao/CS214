@@ -1,5 +1,6 @@
 // add any other includes in the detetc_dups.h file
 #include "detect_dups.h"
+#define _XOPEN_SOURCE = 500
 
 // define any other global variable you may need over here
 
@@ -19,30 +20,57 @@ typedef struct file_node {
 int main(int argc, char *argv[]) {
     // perform error handling, "exit" with failure incase an error occurs
     if(argc != 2) {
-        printf("Usage: ./detect_dups <directory>\n");
+        fprintf(stderr, "Usage: ./detect_dups <directory>\n");
     }
     //if invalid dir given
+    char *dir = argv[1];
 
     // initialize the other global variables you have, if any
-    file_node *filetree_hash_table = NULL;
+    file_node *filetree_table = NULL;
 
     // add the nftw handler to explore the directory
     // nftw should invoke the render_file_info function
+    int err = nftw(dir, render_file_info, 20, 0);
 
-    //print out list of md5 hashes
+    //print out hash table
+    print_filetree(filetree_table);
 }
 
 // render the file information invoked by nftw
 static int render_file_info(const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf) {
     // perform the inode operations over here
+    if((sb->st_mode & S_IFMT) == S_IFLINK) {
+        //regular file
+        printf(" ;symbolic link\n");
+    }
 
     // invoke any function that you may need to render the file information
-    unsigned char *hash;
-    compute_file_hash(fpath, mdctx, hash, md5_len);
-    //if correctly computed hash
-    //add to hash table
+    unsigned char *hash[EVP_MAX_MD_SIZE];
+    int md5_len = 0;
+    mdctx = EVP_MD_CTX_new();
+    int err = compute_file_hash(fpath, mdctx, hash, md5_len);
+
+    if (err < 0) {
+        fprintf(stderr, "%s::%d::Error computing MD5 hash %d\n", __func__, __LINE__, errno);
+        exit(EXIT_FAILURE);
+    }
+
+    file_node new_node = {hash, fpath, 0, NULL, hh};
+    file_node ptr;
     //check if key already exists
+    HASH_FIND(filetree_table, hash, ptr);
+    if(ptr == NULL) {
+        HASH_ADD(filetree_table, hash, new_node);
+    }
     //add file to head of linked list
+    //set file number to current number of items in hash table + 1
+    else {
+        new_node.next = ptr;
+        //replace
+        HASH_DEL(filetree_table, ptr);
+        HASH_ADD(filetree_table, hash, new_node);
+    }
+    
 }
 
 // add any other functions you may need over here
@@ -69,4 +97,20 @@ int compute_file_hash(const char *path, EVP_MD_CTX *mdctx, unsigned char *md_val
     EVP_MD_CTX_reset(mdctx);
     fclose(fd);
     return 0;
+}
+
+void print_filetree(file_node *filetree_table) {
+    file_node *file;
+
+    for (file = filetree_table; file != NULL; file = file->hh.next) {
+        printf("File <number>:");
+        printf("\tMD5 Hash: <hash>");
+        //traverse linked list with head = file
+        printf("\t\tHard Link (<count>): <inode>");
+        printf("\t\t\tPaths:\t<Path 1>");
+        printf("\t\t\t\t<Path N>");
+        printf("\t\t\tSoft Link <number>(<count>): <inode>");
+        printf("\t\t\t\tPaths:\t<Path 1>");
+        printf("\t\t\t\t\t<Path N>");
+    }
 }
