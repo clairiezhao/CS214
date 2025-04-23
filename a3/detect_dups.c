@@ -110,6 +110,10 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
             perror("Stat call error\n");
             exit(EXIT_FAILURE);
         }
+        //if symbolic link points to a directory, don't process
+        if((lsb->st_mode & S_IFMT) == S_IFDIR) {
+            return 0;
+        }
         //pass to md5
         int err = compute_file_hash(fpath, mdctx, md5_hash, &md5_len);
         if (err < 0) {
