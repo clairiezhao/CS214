@@ -37,13 +37,16 @@ int main(int argc, char *argv[]) {
     print_filetree();
 
     //deallocate memory
-    free(mdctx);
-    hlink_node *hprev, *hcurr;
+    EVP_MD_CTX_free(mdctx);
+    hlink_node *hprev, *hcurr, *hlast = NULL;
     slink_node *sprev, *scurr;
     path_node *path_prev, *path_curr;
     for (hlink_node *hlink = filetree_table; hlink != NULL; hlink = hlink->hh.next) {
+        if(hlast != NULL)
+            free(hlast);
         hprev = hlink;
         hcurr = hlink;
+        hlast = hlink;
         while(hcurr != NULL) {
             sprev = hcurr->slinks;
             scurr = hcurr->slinks;
@@ -68,11 +71,18 @@ int main(int argc, char *argv[]) {
                 free(path_prev->path);
                 free(path_prev);
             }
+            free(hcurr->hash);
             hprev = hcurr;
             hcurr = hcurr->next;
-            free(hprev);
+            if(hprev != hlink) {
+                free(hprev);
+            }
         }
     }
+    if(hlast != NULL) {
+        free(hlast);
+    }
+    return EXIT_SUCCESS;
 
 }
 
@@ -88,7 +98,6 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
             perror("MD5 hash error\n");
             exit(EXIT_FAILURE);
         }
-        md5_len += 1;
         hlink_node *new_node;
         hlink_node *ptr;
         new_node = create_hlink(md5_hash, sb->st_ino, 1, md5_len, NULL, NULL, fpath);
@@ -120,7 +129,6 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
             perror("MD5 hash error\n");
             exit(EXIT_FAILURE);
         }
-        md5_len += 1;
         hlink_node *ptr;
         //create new soft link node
         slink_node *new_slink = (slink_node*)malloc(sizeof(slink_node));
@@ -128,7 +136,7 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
         new_slink->count = 1;
         path_node *new_path = (path_node*)malloc(sizeof(path_node));
         int path_len = strlen(fpath) + 1;
-        new_path->path = (char*)malloc(sizeof(path_len));
+        new_path->path = (char*)malloc(path_len * sizeof(char));
         strncpy(new_path->path, fpath, path_len);
         new_path->next = NULL;
         new_slink->paths = new_path;
@@ -166,8 +174,8 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
 
 hlink_node* create_hlink(unsigned char *hash, unsigned long int inode, unsigned int count, unsigned int hash_len, hlink_node *next, slink_node *slinks, char* path_name) {
     hlink_node *new_node = (hlink_node*)malloc(sizeof(hlink_node));;
-    new_node->hash = (unsigned char*)malloc((hash_len + 1) * sizeof(unsigned char));
-    strncpy(new_node->hash, hash, hash_len + 1);
+    new_node->hash = (unsigned char*)malloc((hash_len) * sizeof(unsigned char));
+    strncpy(new_node->hash, hash, hash_len);
     new_node->inode_num = inode;
     new_node->count = count;
     new_node->hash_len = hash_len;
@@ -178,7 +186,7 @@ hlink_node* create_hlink(unsigned char *hash, unsigned long int inode, unsigned 
     else {
         int path_len = strlen(path_name) + 1;
         path_node *new_path = (path_node*)malloc(sizeof(path_node));
-        new_path->path = (char*)malloc(sizeof(path_len));
+        new_path->path = (char*)malloc(path_len * sizeof(char));
         strncpy(new_path->path, path_name, path_len);
         new_path->next = NULL;
         new_node->paths = new_path;
@@ -271,7 +279,7 @@ void print_filetree() {
     for (hlink_node *hlink = filetree_table; hlink != NULL; hlink = hlink->hh.next) {
         printf("File %d\n", hcount);
         printf("\tMD5 Hash: ");
-        for (int i = 0; i < hlink->hash_len - 1; i++) {
+        for (int i = 0; i < hlink->hash_len; i++) {
             printf("%02x", (hlink->hash)[i]);
         }
         printf("\n");
@@ -302,6 +310,7 @@ void print_filetree() {
                     path_ptr = path_ptr->next;
                 }
                 sptr = sptr->next;
+                scount++;
             }
             hptr = hptr->next;
         }

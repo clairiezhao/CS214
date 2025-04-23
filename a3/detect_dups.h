@@ -49,5 +49,3 @@ void print_filetree();
 hlink_node* create_hlink(unsigned char *hash, unsigned long int inode, unsigned int count, unsigned int hash_len, hlink_node *next, slink_node *slinks, char *path_name);
 void insert_hlink(hlink_node *hlink, hlink_node **head);
 void insert_slink(slink_node *slink, hlink_node *hlink);
-
-// add any other function you may need over here
