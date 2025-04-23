@@ -29,43 +29,77 @@ int main(int argc, char *argv[]) {
     int err = nftw(dir, render_file_info, 20, FTW_PHYS);
     
     if(err != 0) {
-        fprintf(stderr, "Error %s: %s is not a valid directory\n", strerror(errno), argv[1]);
+        fprintf(stderr, "Error %d: %s is not a valid directory\n", errno, argv[1]);
+        return EXIT_FAILURE;
     }
-
-    free(mdctx);
 
     //print out hash table
     print_filetree();
+
+    //deallocate memory
+    free(mdctx);
+    hlink_node *hprev, *hcurr;
+    slink_node *sprev, *scurr;
+    path_node *path_prev, *path_curr;
+    for (hlink_node *hlink = filetree_table; hlink != NULL; hlink = hlink->hh.next) {
+        hprev = hlink;
+        hcurr = hlink;
+        while(hcurr != NULL) {
+            sprev = hcurr->slinks;
+            scurr = hcurr->slinks;
+            while(scurr != NULL) {
+                path_prev = scurr->paths;
+                path_curr = scurr->paths;
+                while(path_curr != NULL) {
+                    path_prev = path_curr;
+                    path_curr = path_curr->next;
+                    free(path_prev->path);
+                    free(path_prev);
+                }
+                sprev = scurr;
+                scurr = scurr->next;
+                free(sprev);
+            }
+            path_prev = hcurr->paths;
+            path_curr = hcurr->paths;
+            while(path_curr != NULL) {
+                path_prev = path_curr;
+                path_curr = path_curr->next;
+                free(path_prev->path);
+                free(path_prev);
+            }
+            hprev = hcurr;
+            hcurr = hcurr->next;
+            free(hprev);
+        }
+    }
+
 }
 
 // render the file information invoked by nftw
 static int render_file_info(const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf) {
-    unsigned char hash[EVP_MAX_MD_SIZE];
+    //printf("path: %s\n", fpath);
+    unsigned char md5_hash[EVP_MAX_MD_SIZE];
     int md5_len = 0;
     //if regular file
     if((sb->st_mode & S_IFMT) == S_IFREG) {
-        int err = compute_file_hash(fpath, mdctx, hash, &md5_len);
+        int err = compute_file_hash(fpath, mdctx, md5_hash, &md5_len);
         if (err < 0) {
-            fprintf(stderr, "%s::%d::Error computing MD5 hash %d\n", __func__, __LINE__, errno);
+            perror("MD5 hash error\n");
             exit(EXIT_FAILURE);
         }
-        hlink_node *new_node, *ptr;
-        new_node->hash = hash;
-        new_node->inode_num = sb->st_ino;
-        new_node->count = 1;
-        new_node->next = NULL;
-        new_node->slinks = NULL;
-        //add path
-        path_node *new_path = {fpath, NULL};
-        new_node->paths = new_path;
+        md5_len += 1;
+        hlink_node *new_node;
+        hlink_node *ptr;
+        new_node = create_hlink(md5_hash, sb->st_ino, 1, md5_len, NULL, NULL, fpath);
         //check if key already exists
-        HASH_FIND(filetree_table, hash, ptr);
+        HASH_FIND(hh, filetree_table, md5_hash, md5_len, ptr);
         if(ptr == NULL) {
-            HASH_ADD(filetree_table, hash, new_node);
+            HASH_ADD_KEYPTR(hh, filetree_table, new_node->hash, md5_len, new_node);
         }
         //add new hlink node if hard link is unique
         else {
-            insert_hlink(new_node, ptr);
+            insert_hlink(new_node, &ptr);
         }
     }
 
@@ -73,57 +107,51 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
     else if((sb->st_mode & S_IFMT) == S_IFLNK) {
         struct stat *lsb = (struct stat*)malloc(sizeof(struct stat));
         if(stat(fpath, lsb) == -1) {
-            perror("stat\n");
+            perror("Stat call error\n");
             exit(EXIT_FAILURE);
         }
         //pass to md5
-        int err = compute_file_hash(fpath, mdctx, hash, &md5_len);
+        int err = compute_file_hash(fpath, mdctx, md5_hash, &md5_len);
         if (err < 0) {
-            fprintf(stderr, "%s::%d::Error computing MD5 hash %d\n", __func__, __LINE__, errno);
+            perror("MD5 hash error\n");
             exit(EXIT_FAILURE);
         }
-
+        md5_len += 1;
         hlink_node *ptr;
-        slink_node *new_slink;
+        //create new soft link node
+        slink_node *new_slink = (slink_node*)malloc(sizeof(slink_node));
         new_slink->inode_num = sb->st_ino;
         new_slink->count = 1;
-        path_node *new_path = {fpath, NULL};
+        path_node *new_path = (path_node*)malloc(sizeof(path_node));
+        int path_len = strlen(fpath) + 1;
+        new_path->path = (char*)malloc(sizeof(path_len));
+        strncpy(new_path->path, fpath, path_len);
+        new_path->next = NULL;
         new_slink->paths = new_path;
         new_slink->next = NULL;
-        HASH_FIND(filetree_table, hash, ptr);
-        //if hash doesn't yet exist
+        //check if hash exists in table
+        HASH_FIND(hh, filetree_table, md5_hash, md5_len, ptr);
         if(ptr == NULL) {
-            hlink_node *new_hlink;
-            new_hlink->hash = hash;
-            new_hlink->inode_num = lsb->st_ino;
-            new_hlink->count = 0;
-            new_hlink->next = NULL;
-            new_hlink->slinks = slink_node;
-            new_hlink->paths = NULL;
+            hlink_node *new_hlink = create_hlink(md5_hash, lsb->st_ino, 0, md5_len, NULL, new_slink, NULL);
+            HASH_ADD_KEYPTR(hh, filetree_table, new_hlink->hash, md5_len, new_hlink);
         }
-        //run through all hard links to check for inode num
-        hlink_node *head = ptr;
         else {
+            //run through all hard links to check for inode num
+            hlink_node *head = ptr;
             //ptr is head of linked list of hard links
             while(ptr != NULL) {
                 if(ptr->inode_num == lsb->st_ino) {
-                    insert_slink(new_slink, ptr->slinks);
+                    insert_slink(new_slink, ptr);
+                    free(lsb);
                     return 0;
                 }
                 ptr = ptr->next;
             }
-            //insert a hard link
+            //if DNE, add new hard link node
+            hlink_node *new_hlink = create_hlink(md5_hash, lsb->st_ino, 0, md5_len, NULL, new_slink, NULL);
+            insert_hlink(new_hlink, &head);
+            free(lsb);
         }
-        //if DNE, add new hard link node
-        hlink_node *new_hlink;
-        new_hlink->hash = hash;
-        new_hlink->inode_num = lsb->st_ino;
-        new_hlink->count = 0;
-        new_hlink->next = NULL;
-        new_hlink->slinks = slink_node;
-        new_hlink->paths = NULL;
-        insert(new_hlink, head);
-        free(lsb);
     }
     
     return 0;
@@ -132,54 +160,76 @@ static int render_file_info(const char *fpath, const struct stat *sb, int tflag,
 // add any other functions you may need over here
 //update duplicate info: pass in md5 hash, pathname, ref count
 
+hlink_node* create_hlink(unsigned char *hash, unsigned long int inode, unsigned int count, unsigned int hash_len, hlink_node *next, slink_node *slinks, char* path_name) {
+    hlink_node *new_node = (hlink_node*)malloc(sizeof(hlink_node));;
+    new_node->hash = (unsigned char*)malloc((hash_len + 1) * sizeof(unsigned char));
+    strncpy(new_node->hash, hash, hash_len + 1);
+    new_node->inode_num = inode;
+    new_node->count = count;
+    new_node->hash_len = hash_len;
+    new_node->next = next;
+    new_node->slinks = slinks;
+    if(path_name == NULL)
+        new_node->paths = NULL;
+    else {
+        int path_len = strlen(path_name) + 1;
+        path_node *new_path = (path_node*)malloc(sizeof(path_node));
+        new_path->path = (char*)malloc(sizeof(path_len));
+        strncpy(new_path->path, path_name, path_len);
+        new_path->next = NULL;
+        new_node->paths = new_path;
+    }
+    return new_node;
+}
+
 //insert a hard link
-void insert_hlink(hlink_node *hlink, hlink_node *head) {
-    if(head == NULL) {
-        head = hlink;
+void insert_hlink(hlink_node *hlink, hlink_node **head) {
+    //head cannot be null
+    if((*head) == NULL) {
         return;
     }
-    hlink_node *ptr = head;
+    hlink_node *ptr = (*head), *prev = (*head);
     //search list for inode num; if it exists, update node
     while(ptr != NULL) {
         if(ptr->inode_num == hlink->inode_num) {
             ptr->count += 1;
-            insert_path(hlink->paths, ptr->paths);
+            //insert new path name
+            if(ptr->paths != NULL) {
+                hlink->paths->next = ptr->paths;
+            }
+            ptr->paths = hlink->paths;
             return;
         }
+        prev = ptr;
         ptr = ptr->next;
     }
-    //if dne, add to front of list
-    hlink->next = head;
-    head = hlink;
+    //if dne, add to end of list
+    prev->next = hlink;
 }
 
 //insert a soft link into the list
-void insert_slink(slink_node *slink, slink_node *head) {
-    if(head == NULL) {
-        head = slink;
+void insert_slink(slink_node *slink, hlink_node *hlink) {
+    if(hlink->slinks == NULL) {
+        hlink->slinks = slink;
         return;
     }
-    slink_node *ptr = head;
+
     //search list for inode num; if it exists, update node
+    slink_node *ptr = hlink->slinks;
     while(ptr != NULL) {
         if(ptr->inode_num == slink->inode_num) {
             ptr->count += 1;
-            insert_path(slink->paths, ptr->paths);
+            if(ptr->paths != NULL) {
+                slink->paths->next = ptr->paths;
+            }
+            ptr->paths = slink->paths;
             return;
         }
         ptr = ptr->next;
     }
     //if dne, add to front of list
-    slink->next = head;
-    head = slink;
-}
-
-//insert a path name into a list of path names
-void insert_path(path_node *path, path_node *head) {
-    if(head != NULL) {
-        path->next = head;
-    }
-    head = path;
+    slink->next = hlink->slinks;
+    hlink->slinks = slink;
 }
 
 //*md_value is a string with the final md5 hashcode
@@ -215,10 +265,10 @@ void print_filetree() {
 
     //traverse every hash in hash table
     for (hlink_node *hlink = filetree_table; hlink != NULL; hlink = hlink->hh.next) {
-        printf("File %d\n", count);
+        printf("File %d\n", hcount);
         printf("\tMD5 Hash: ");
-        for (int i = 0; i < md5_len; i++) {
-            printf("%02x", hash[i]);
+        for (int i = 0; i < hlink->hash_len - 1; i++) {
+            printf("%02x", (hlink->hash)[i]);
         }
         printf("\n");
         //traverse linked list of unique hard links
@@ -234,22 +284,23 @@ void print_filetree() {
                 printf("\t\t\t\t%s\n", path_ptr->path);
                 path_ptr = path_ptr->next;
             }
-            sptr = hlink->slinks;
+            sptr = hptr->slinks;
             scount = 1;
             while(sptr != NULL) {
                 printf("\t\t\tSoft Link %d(%u): %lu\n", scount, sptr->count, sptr->inode_num);
                 path_ptr = sptr->paths;
                 if(path_ptr != NULL) {
-                    printf("\t\t\tPaths:\t%s\n", path_ptr->path);
+                    printf("\t\t\t\tPaths:\t%s\n", path_ptr->path);
                     path_ptr = path_ptr->next;
                 }
                 while(path_ptr != NULL) {
-                    printf("\t\t\t\t%s\n", path_ptr->path);
+                    printf("\t\t\t\t\t%s\n", path_ptr->path);
                     path_ptr = path_ptr->next;
                 }
                 sptr = sptr->next;
             }
             hptr = hptr->next;
         }
+        hcount++;
     }
 }

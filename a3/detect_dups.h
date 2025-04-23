@@ -15,7 +15,7 @@ typedef struct hlink_node {
     unsigned char *hash;
     //inode number, curr count of hard links with that num
     unsigned long int inode_num;
-    unsigned int count;
+    unsigned int count, hash_len;
     //next unique hard link
     struct hlink_node *next;
     //head of linked list of soft links
@@ -46,8 +46,8 @@ int compute_file_hash(const char *path, EVP_MD_CTX *mdctx, unsigned char *md_val
 void print_filetree();
 
 //linked list operations
-void insert_hlink(hlink_node *hlink, hlink_node *head);
-void insert_slink(slink_node *slink, slink_node *head);
-void insert_path(path_node *path, path_node *head);
+hlink_node* create_hlink(unsigned char *hash, unsigned long int inode, unsigned int count, unsigned int hash_len, hlink_node *next, slink_node *slinks, char *path_name);
+void insert_hlink(hlink_node *hlink, hlink_node **head);
+void insert_slink(slink_node *slink, hlink_node *hlink);
 
 // add any other function you may need over here
