@@ -147,7 +147,6 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
     pthread_mutex_lock(&table_mutex);
     hash_node *ptr;
     HASH_FIND(hh, cache_table, key, key_len, ptr);
-    pthread_mutex_unlock(&table_mutex);
 
     uint8_t opcode = header->opcode;
     
@@ -155,6 +154,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
         case CMD_GET:
             //item not found
             if(ptr == NULL) {
+                pthread_mutex_unlock(&table_mutex);
                 header->vbucket_id = htons(RES_NOT_FOUND);
                 header->key_length = 0;
                 header->total_body_length = 0;
@@ -169,6 +169,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
                 write(client, header, sizeof(memcache_req_header_t));
                 write(client, ptr->val, ptr->val_len);
                 pthread_mutex_unlock(&(ptr->entry_mutex));
+                pthread_mutex_unlock(&table_mutex);
             }
             break;
         case CMD_SET:
@@ -183,33 +184,36 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             }
             //add new value
             hash_node *new_node = (hash_node*)malloc(sizeof(hash_node));
+            pthread_mutex_init(&(new_node->entry_mutex), NULL);
+            pthread_mutex_lock(&(new_node->entry_mutex));
             new_node->key = key;
             new_node->val = value;
             new_node->key_len = key_len;
             new_node->val_len = val_len;
-            pthread_mutex_init(&(new_node->entry_mutex), NULL);
-            pthread_mutex_lock(&(new_node->entry_mutex));
             HASH_ADD_KEYPTR(hh, cache_table, key, key_len, new_node);
             pthread_mutex_unlock(&(new_node->entry_mutex));
             header->vbucket_id = RES_OK;
             header->key_length = 0;
             header->total_body_length = 0;
             write(client, header, sizeof(memcache_req_header_t));
+            pthread_mutex_unlock(&table_mutex);
             break;
         case CMD_ADD:
             if(ptr == NULL) {
+                pthread_mutex_unlock(&table_mutex);
                 hash_node *new_node = (hash_node*)malloc(sizeof(hash_node));
+                pthread_mutex_init(&(new_node->entry_mutex), NULL);
+                pthread_mutex_lock(&(new_node->entry_mutex));
                 new_node->key = key;
                 new_node->val = value;
                 new_node->key_len = key_len;
                 new_node->val_len = val_len;
-                pthread_mutex_init(&(new_node->entry_mutex), NULL);
-                pthread_mutex_lock(&(new_node->entry_mutex));
                 HASH_ADD_KEYPTR(hh, cache_table, key, key_len, new_node);
                 pthread_mutex_unlock(&(new_node->entry_mutex));
                 header->vbucket_id = RES_OK;
             }
             else {
+                pthread_mutex_unlock(&table_mutex);
                 header->vbucket_id = htons(RES_NOT_FOUND);
             }
             header->key_length = 0;
@@ -218,6 +222,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             break;
         case CMD_DELETE:
             if(ptr == NULL) {
+                pthread_mutex_unlock(&table_mutex);
                 header->vbucket_id = htons(RES_NOT_FOUND);
             }
             else {
@@ -227,6 +232,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
                 free(ptr);
                 pthread_mutex_unlock(&(ptr->entry_mutex));
                 pthread_mutex_destroy(&(ptr->entry_mutex));
+                pthread_mutex_unlock(&table_mutex);
                 header->vbucket_id = RES_OK;
             }
             header->key_length = 0;
@@ -234,6 +240,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             write(client, header, sizeof(memcache_req_header_t));
             break;
         case CMD_VERSION:
+            pthread_mutex_unlock(&table_mutex);
             header->vbucket_id = RES_OK;
             header->key_length = 0;
             header->total_body_length = htonl(strlen("C-Memcached 1.0"));
@@ -243,7 +250,6 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             printf("bytes written: %d\n", test);
             break;
         case CMD_OUTPUT:
-            pthread_mutex_lock(&table_mutex);
             struct timespec time;
             for (hash_node *node = cache_table; node != NULL; node = node->hh.next) {
                 if (clock_gettime(CLOCK_REALTIME, &time) != 0) {
