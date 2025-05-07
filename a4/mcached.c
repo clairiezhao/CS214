@@ -21,19 +21,22 @@ typedef struct hash_node {
     uint8_t *key, *val;
     uint16_t key_len;
     uint32_t val_len;
+    pthread_mutex_t entry_mutex;
     UT_hash_handle hh;
 } hash_node;
 
 typedef struct thread_args {
-    int client;
+    int srv;
     int thread_num;
     int port;
 } thread_args;
 
+void* worker_thread(void *arg);
 void process_request(int client, memcache_req_header_t *header, uint8_t *key, uint8_t *value, uint16_t key_len, uint32_t val_len);
 
 //table only holds one value per key: replace if existing
 hash_node *cache_table;
+pthread_mutex_t table_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char **argv) {
 
@@ -42,7 +45,7 @@ int main(int argc, char **argv) {
     //read port num
     int port = atoi(argv[1]);
     //read num of worker threads
-    //int num_threads = strtol(argv[2]);
+    int num_threads = atoi(argv[2]);
 
     // create a socket
     int srv = socket(AF_INET, SOCK_STREAM, 0);
@@ -65,13 +68,37 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    pthread_t *threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
+    for (int i = 0; i < num_threads; i++) {
+        struct thread_args *targs = malloc(sizeof(struct thread_args));
+        targs->srv = srv;
+        targs->port = htons(port);
+        targs->thread_num = i;
+        int ret = pthread_create(&threads[i], NULL, &worker_thread, targs);
+    }
+
+    for (int i = 0; i < num_threads; ++i)
+        pthread_join(threads[i], NULL);
+
+    free(threads);
+    close(srv);
+    return EXIT_SUCCESS;
+}
+
+//worker thread function
+void* worker_thread(void *arg) {
+    struct thread_args targs = *(struct thread_args *)arg;
+
+    int thread_num = targs.thread_num;
+    int srv = targs.srv;
+
     //queue client requests: terminate when no more clients
     while(1) {
         int client = accept(srv, NULL, NULL);
         if (client < 0) {
             perror("accept");
             close(srv);
-            return EXIT_FAILURE;
+            exit(EXIT_FAILURE);
         }
 
         char buffer[sizeof(memcache_req_header_t)] = {0};
@@ -84,7 +111,7 @@ int main(int argc, char **argv) {
                 perror("cannot read header");
                 close(client);
                 close(srv);
-                return EXIT_FAILURE;
+                exit(EXIT_FAILURE);
             }
             uint8_t *key, *value;
             uint32_t body_len = ntohl(header->total_body_length);
@@ -98,7 +125,7 @@ int main(int argc, char **argv) {
                     perror("cannot read body");
                     close(client);
                     close(srv);
-                    return EXIT_FAILURE;
+                    exit(EXIT_FAILURE);
                 }
                 key = body;
                 value = body + key_len;
@@ -111,22 +138,21 @@ int main(int argc, char **argv) {
         }
         close(client);
     }
-    
-    close(srv);
-    return EXIT_SUCCESS;
+    free(arg);
 }
 
 void process_request(int client, memcache_req_header_t *header, uint8_t *key, uint8_t *value, uint16_t key_len, uint32_t val_len) {
     header->magic = 0x81;
+
+    pthread_mutex_lock(&table_mutex);
     hash_node *ptr;
     HASH_FIND(hh, cache_table, key, key_len, ptr);
+    pthread_mutex_unlock(&table_mutex);
+
     uint8_t opcode = header->opcode;
-
-    printf("key_len: %d, val_len: %u\n", key_len, val_len);
-
+    
     switch(opcode) {
         case CMD_GET:
-            puts("GET");
             //item not found
             if(ptr == NULL) {
                 header->vbucket_id = htons(RES_NOT_FOUND);
@@ -136,46 +162,54 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             }
             //item found
             else {
+                pthread_mutex_lock(&(ptr->entry_mutex));
                 header->vbucket_id = RES_OK;
                 header->key_length = 0;
                 header->total_body_length = htonl(ptr->val_len);
                 write(client, header, sizeof(memcache_req_header_t));
                 write(client, ptr->val, ptr->val_len);
+                pthread_mutex_unlock(&(ptr->entry_mutex));
             }
             break;
         case CMD_SET:
-            puts("SET");
+            if(ptr != NULL) {
+                //remove existing value
+                pthread_mutex_lock(&(ptr->entry_mutex));
+                HASH_DEL(cache_table, ptr);
+                free(ptr->key);
+                free(ptr);
+                pthread_mutex_unlock(&(ptr->entry_mutex));
+                pthread_mutex_destroy(&(ptr->entry_mutex));
+            }
+            //add new value
             hash_node *new_node = (hash_node*)malloc(sizeof(hash_node));
             new_node->key = key;
             new_node->val = value;
             new_node->key_len = key_len;
             new_node->val_len = val_len;
-            if(ptr != NULL) {
-                //remove existing value
-                HASH_DEL(cache_table, ptr);
-                free(ptr->key);
-                free(ptr);
-            }
-            //add new value
+            pthread_mutex_init(&(new_node->entry_mutex), NULL);
+            pthread_mutex_lock(&(new_node->entry_mutex));
             HASH_ADD_KEYPTR(hh, cache_table, key, key_len, new_node);
+            pthread_mutex_unlock(&(new_node->entry_mutex));
             header->vbucket_id = RES_OK;
             header->key_length = 0;
             header->total_body_length = 0;
             write(client, header, sizeof(memcache_req_header_t));
             break;
         case CMD_ADD:
-            printf("ADD\n");
             if(ptr == NULL) {
                 hash_node *new_node = (hash_node*)malloc(sizeof(hash_node));
                 new_node->key = key;
                 new_node->val = value;
                 new_node->key_len = key_len;
                 new_node->val_len = val_len;
+                pthread_mutex_init(&(new_node->entry_mutex), NULL);
+                pthread_mutex_lock(&(new_node->entry_mutex));
                 HASH_ADD_KEYPTR(hh, cache_table, key, key_len, new_node);
+                pthread_mutex_unlock(&(new_node->entry_mutex));
                 header->vbucket_id = RES_OK;
             }
             else {
-                //printf("vbucket id: %u\n", htons(RES_NOT_FOUND));
                 header->vbucket_id = htons(RES_NOT_FOUND);
             }
             header->key_length = 0;
@@ -183,15 +217,16 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             write(client, header, sizeof(memcache_req_header_t));
             break;
         case CMD_DELETE:
-            puts("DELETE");
             if(ptr == NULL) {
-                //printf("vbucket id: %u\n", htons(RES_NOT_FOUND));
                 header->vbucket_id = htons(RES_NOT_FOUND);
             }
             else {
+                pthread_mutex_lock(&(ptr->entry_mutex));
                 HASH_DEL(cache_table, ptr);
                 free(ptr->key);
                 free(ptr);
+                pthread_mutex_unlock(&(ptr->entry_mutex));
+                pthread_mutex_destroy(&(ptr->entry_mutex));
                 header->vbucket_id = RES_OK;
             }
             header->key_length = 0;
@@ -199,7 +234,6 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             write(client, header, sizeof(memcache_req_header_t));
             break;
         case CMD_VERSION:
-            puts("VERSION");
             header->vbucket_id = RES_OK;
             header->key_length = 0;
             header->total_body_length = htonl(strlen("C-Memcached 1.0"));
@@ -209,7 +243,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             printf("bytes written: %d\n", test);
             break;
         case CMD_OUTPUT:
-            puts("OUTPUT");
+            pthread_mutex_lock(&table_mutex);
             struct timespec time;
             for (hash_node *node = cache_table; node != NULL; node = node->hh.next) {
                 if (clock_gettime(CLOCK_REALTIME, &time) != 0) {
@@ -236,6 +270,7 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
                 }
                 printf("\n");
             }
+            pthread_mutex_unlock(&table_mutex);
             header->vbucket_id = RES_OK;
             header->key_length = 0;
             header->total_body_length = 0;
@@ -246,24 +281,3 @@ void process_request(int client, memcache_req_header_t *header, uint8_t *key, ui
             exit(EXIT_FAILURE);
     }
 }
-
-//worker thread function
-/*void* worker_thread(void *arg) {
-    struct thread_args targs = *(struct thread_args *)arg;
-
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in server = {0};
-    server.sin_family = AF_INET;
-    server.sin_port = htons(targs.port);
-    inet_pton(AF_INET, targs.server_ip, &server.sin_addr);
-
-    int thread_num = targs.thread_num;
-
-    if (connect(sock, (struct sockaddr*)&server, sizeof(server)) != 0) {
-        pthread_mutex_lock(&pmutex);
-        printf("Thread %d; ", thread_num);
-        printf("FAILURE: Couldn't connect to server.\n");
-        pthread_mutex_unlock(&pmutex);
-        exit(-1);
-    }
-}*/
